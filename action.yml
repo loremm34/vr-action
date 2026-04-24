@@ -1,55 +1,108 @@
-name: 'Visual Regression Check'
-description: 'Run visual regression tests against your site and get PR comments with diff screenshots'
+name: "Visual Regression Check"
+description: "Run visual regression tests against your site and get PR comments with diff screenshots"
 
 branding:
-  icon: 'camera'
-  color: 'blue'
+  icon: "camera"
+  color: "blue"
 
 inputs:
   api-key:
-    description: 'VR API key (Settings → API Keys in the dashboard)'
+    description: "VR API key (Settings → API Keys in the dashboard)"
     required: true
   project-id:
-    description: 'VR project ID (UUID from the dashboard)'
+    description: "VR project ID (UUID from the dashboard)"
     required: true
   site-url:
-    description: 'URL of the site to run tests against'
+    description: "Production URL of your site (e.g. https://my-app.vercel.app)"
     required: true
+  vercel-preview:
+    description: "Automatically detect and use Vercel preview URL for pull requests instead of site-url"
+    required: false
+    default: "true"
   backend-url:
-    description: 'Visual regression backend URL'
+    description: "Visual regression backend URL"
     required: false
-    default: 'https://web-production-52de4.up.railway.app'
+    default: "https://web-production-52de4.up.railway.app"
   suite:
-    description: 'Test suite name (used for grouping results in the dashboard)'
+    description: "Test suite name (used for grouping results in the dashboard)"
     required: false
-    default: 'website'
+    default: "website"
   pages:
     description: |
       JSON array of pages to test. Example:
       [{"name": "Home", "path": "/"}, {"name": "Login", "path": "/login", "wait_ms": 200}]
       Each page: name (string), path (string), key (optional), wait_ms (optional), threshold (optional).
     required: false
-    default: ''
+    default: ""
   config-file:
-    description: 'Path to a JSON config file in your repo (alternative to inline pages input)'
+    description: "Path to a JSON config file in your repo (alternative to inline pages input)"
     required: false
-    default: ''
+    default: ""
   threshold:
-    description: 'Allowed pixel difference ratio (0.0–1.0). Default: 0.1 (10%)'
+    description: "Allowed pixel difference ratio (0.0–1.0). Default: 0.1 (10%)"
     required: false
-    default: '0.1'
+    default: "0.1"
   detect-noise:
-    description: 'Auto-ignore animated regions like spinners and cursors. Default: true'
+    description: "Auto-ignore animated regions like spinners and cursors. Default: true"
     required: false
-    default: 'true'
+    default: "true"
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
+    - name: Resolve Vercel preview URL (PR only)
+      id: resolve-url
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        SITE_URL="${{ inputs.site-url }}"
+
+        if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ inputs.vercel-preview }}" = "true" ]; then
+          SHA="${{ github.event.pull_request.head.sha }}"
+          echo "PR detected — looking for Vercel preview for SHA ${SHA:0:7}..."
+          PREVIEW_URL=""
+          for i in $(seq 1 30); do
+            DEPLOY_ID=$(curl -sf \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/deployments?sha=$SHA&environment=Preview" \
+              | python3 -c "
+        import json,sys
+        deps = json.load(sys.stdin)
+        if deps: print(deps[0]['id'])
+        " 2>/dev/null || true)
+            if [ -n "$DEPLOY_ID" ]; then
+              PREVIEW_URL=$(curl -sf \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/deployments/$DEPLOY_ID/statuses" \
+                | python3 -c "
+        import json,sys
+        statuses = json.load(sys.stdin)
+        for s in statuses:
+            if s.get('state') == 'success' and s.get('environment_url'):
+                print(s['environment_url']); break
+        " 2>/dev/null || true)
+              if [ -n "$PREVIEW_URL" ]; then
+                echo "Found Vercel preview: $PREVIEW_URL"
+                SITE_URL="$PREVIEW_URL"
+                break
+              fi
+            fi
+            echo "Attempt $i/30: preview not ready, waiting 10s..."
+            sleep 10
+          done
+          if [ -z "$PREVIEW_URL" ]; then
+            echo "WARNING: Vercel preview not found after 5 min, using production URL"
+          fi
+        fi
+
+        echo "Testing against: $SITE_URL"
+        echo "url=$SITE_URL" >> $GITHUB_OUTPUT
+
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
+        python-version: "3.12"
 
     - name: Run visual regression tests
       shell: bash
@@ -60,7 +113,7 @@ runs:
       run: |
         ARGS=(
           --suite "${{ inputs.suite }}"
-          --base-url "${{ inputs.site-url }}"
+          --base-url "${{ steps.resolve-url.outputs.url }}"
           --backend-url "${{ inputs.backend-url }}"
           --threshold "${{ inputs.threshold }}"
         )
@@ -77,6 +130,14 @@ runs:
         fi
 
         python "${{ github.action_path }}/run_visual_tests.py" "${ARGS[@]}"
+
+    - name: Upload visual report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: visual-regression-report
+        path: visual-report.json
+        if-no-files-found: ignore
 
     - name: Upload visual report
       if: always()
