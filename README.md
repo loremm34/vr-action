@@ -42,25 +42,25 @@ Add two secrets to your repo (**Settings → Secrets → Actions**):
 - `VR_API_KEY` — API key from the VR dashboard
 - `VR_PROJECT_ID` — Project ID (UUID) from the VR dashboard
 
-That's it. For pull requests the action automatically finds the preview deployment URL so you're always testing the actual changes, not production.
+That's it. For pull requests the action automatically finds the preview deployment URL via the GitHub Deployments API, so you're always testing the actual PR changes, not production. No extra configuration needed for Vercel/Netlify/Render on standard plans.
 
 ## Inputs
 
-| Input                   | Required | Default     | Description                                              |
-|-------------------------|----------|-------------|----------------------------------------------------------|
-| `api-key`               | ✅       | —           | VR API key                                               |
-| `project-id`            | ✅       | —           | VR project UUID                                          |
-| `site-url`              | ✅       | —           | Production URL of your site                              |
-| `pages`                 | *        | —           | JSON array of pages to test (see format below)           |
-| `config-file`           | *        | —           | Path to a JSON config file in your repo                  |
-| `suite`                 |          | `website`   | Suite name for grouping runs in the dashboard            |
-| `threshold`             |          | `0.1`       | Max allowed pixel diff ratio (0.0–1.0)                   |
-| `detect-noise`          |          | `true`      | Auto-ignore animated regions (spinners, cursors)         |
-| `auto-detect-preview`   |          | `true`      | Auto-find PR preview URL via GitHub Deployments API      |
-| `preview-environment`   |          | `Preview`   | GitHub Deployment environment name to look for           |
-| `preview-url`           |          | —           | Explicit preview URL (skips auto-detect, see below)      |
-| `preview-bypass-secret` |          | —           | Secret token to bypass preview auth (Vercel, see below)  |
-| `backend-url`           |          | production  | VR backend URL (no need to change)                       |
+| Input                   | Required | Default    | Description                                             |
+| ----------------------- | -------- | ---------- | ------------------------------------------------------- |
+| `api-key`               | ✅       | —          | VR API key                                              |
+| `project-id`            | ✅       | —          | VR project UUID                                         |
+| `site-url`              | ✅       | —          | Production URL of your site                             |
+| `pages`                 | \*       | —          | JSON array of pages to test (see format below)          |
+| `config-file`           | \*       | —          | Path to a JSON config file in your repo                 |
+| `suite`                 |          | `website`  | Suite name for grouping runs in the dashboard           |
+| `threshold`             |          | `0.1`      | Max allowed pixel diff ratio (0.0–1.0)                  |
+| `detect-noise`          |          | `true`     | Auto-ignore animated regions (spinners, cursors)        |
+| `auto-detect-preview`   |          | `true`     | Auto-find PR preview URL via GitHub Deployments API     |
+| `preview-environment`   |          | `Preview`  | GitHub Deployment environment name to look for          |
+| `preview-url`           |          | —          | Explicit preview URL (skips auto-detect, see below)     |
+| `preview-bypass-secret` |          | —          | Secret token to bypass preview auth (Vercel, see below) |
+| `backend-url`           |          | production | VR backend URL (no need to change)                      |
 
 \* Either `pages` or `config-file` must be provided.
 
@@ -77,7 +77,7 @@ These platforms automatically register deployments to GitHub — no extra config
   with:
     api-key: ${{ secrets.VR_API_KEY }}
     project-id: ${{ secrets.VR_PROJECT_ID }}
-    site-url: https://your-site.com   # production fallback
+    site-url: https://your-site.com # production fallback
     pages: '[{"name": "Home", "path": "/"}]'
     # auto-detect-preview: "true"   # default, no need to set
 ```
@@ -85,12 +85,16 @@ These platforms automatically register deployments to GitHub — no extra config
 If your platform uses a non-default environment name (not `Preview`), set it explicitly:
 
 ```yaml
-    preview-environment: "staging"   # or "pr-preview", "preview", etc.
+preview-environment: "staging" # or "pr-preview", "preview", etc.
 ```
 
 ### Vercel: bypass preview authentication
 
-By default Vercel requires login to access preview deployments. Enable automation bypass:
+Vercel preview deployments are **publicly accessible by default** (Free plan, no protection configured). Auto-detection works out of the box — no bypass needed.
+
+**The bypass secret is only needed if you explicitly enabled Deployment Protection** on your Vercel project (Pro/Team plans, opt-in feature). In that case, preview URLs show a "Login to Vercel" page and screenshots will be wrong without it.
+
+To enable bypass:
 
 1. Vercel Dashboard → your project → **Settings → Deployment Protection**
 2. Enable **"Protection Bypass for Automation"** and copy the generated secret
@@ -135,25 +139,25 @@ jobs:
 If you always want to test production (e.g. push-only workflow):
 
 ```yaml
-    auto-detect-preview: "false"
+auto-detect-preview: "false"
 ```
 
 ## Page format
 
 ```json
 [
-  {"name": "Home",  "path": "/"},
-  {"name": "Login", "path": "/login", "wait_ms": 300, "threshold": 0.05}
+  { "name": "Home", "path": "/" },
+  { "name": "Login", "path": "/login", "wait_ms": 300, "threshold": 0.05 }
 ]
 ```
 
-| Field       | Type   | Description                                               |
-|-------------|--------|-----------------------------------------------------------|
-| `name`      | string | Display name shown in the dashboard and PR comment        |
-| `path`      | string | URL path appended to `site-url` (or `preview-url`)        |
-| `key`       | string | Unique key for baseline matching (defaults to name + path)|
-| `wait_ms`   | int    | Extra wait after page load in ms (useful for animations)  |
-| `threshold` | float  | Per-page threshold override                               |
+| Field       | Type   | Description                                                |
+| ----------- | ------ | ---------------------------------------------------------- |
+| `name`      | string | Display name shown in the dashboard and PR comment         |
+| `path`      | string | URL path appended to `site-url` (or `preview-url`)         |
+| `key`       | string | Unique key for baseline matching (defaults to name + path) |
+| `wait_ms`   | int    | Extra wait after page load in ms (useful for animations)   |
+| `threshold` | float  | Per-page threshold override                                |
 
 ## Using a config file
 
@@ -175,8 +179,8 @@ For larger projects, keep pages in a JSON file in your repo:
   "suite": "website",
   "threshold": 0.1,
   "pages": [
-    {"name": "Home",  "path": "/"},
-    {"name": "Login", "path": "/login", "wait_ms": 200}
+    { "name": "Home", "path": "/" },
+    { "name": "Login", "path": "/login", "wait_ms": 200 }
   ]
 }
 ```
