@@ -1,0 +1,87 @@
+name: 'Visual Regression Check'
+description: 'Run visual regression tests against your site and get PR comments with diff screenshots'
+
+branding:
+  icon: 'camera'
+  color: 'blue'
+
+inputs:
+  api-key:
+    description: 'VR API key (Settings → API Keys in the dashboard)'
+    required: true
+  project-id:
+    description: 'VR project ID (UUID from the dashboard)'
+    required: true
+  site-url:
+    description: 'URL of the site to run tests against'
+    required: true
+  backend-url:
+    description: 'Visual regression backend URL'
+    required: false
+    default: 'https://web-production-52de4.up.railway.app'
+  suite:
+    description: 'Test suite name (used for grouping results in the dashboard)'
+    required: false
+    default: 'website'
+  pages:
+    description: |
+      JSON array of pages to test. Example:
+      [{"name": "Home", "path": "/"}, {"name": "Login", "path": "/login", "wait_ms": 200}]
+      Each page: name (string), path (string), key (optional), wait_ms (optional), threshold (optional).
+    required: false
+    default: ''
+  config-file:
+    description: 'Path to a JSON config file in your repo (alternative to inline pages input)'
+    required: false
+    default: ''
+  threshold:
+    description: 'Allowed pixel difference ratio (0.0–1.0). Default: 0.1 (10%)'
+    required: false
+    default: '0.1'
+  detect-noise:
+    description: 'Auto-ignore animated regions like spinners and cursors. Default: true'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Run visual regression tests
+      shell: bash
+      env:
+        VR_API_KEY: ${{ inputs.api-key }}
+        VR_PROJECT_ID: ${{ inputs.project-id }}
+        VR_PAGES_JSON: ${{ inputs.pages }}
+      run: |
+        ARGS=(
+          --suite "${{ inputs.suite }}"
+          --base-url "${{ inputs.site-url }}"
+          --backend-url "${{ inputs.backend-url }}"
+          --threshold "${{ inputs.threshold }}"
+        )
+
+        if [ "${{ inputs.detect-noise }}" = "true" ]; then
+          ARGS+=(--detect-noise)
+        fi
+
+        if [ -n "$VR_PAGES_JSON" ]; then
+          echo "$VR_PAGES_JSON" > /tmp/vr_pages_inline.json
+          ARGS+=(--pages-file /tmp/vr_pages_inline.json)
+        elif [ -n "${{ inputs.config-file }}" ]; then
+          ARGS+=(--config-file "${{ inputs.config-file }}")
+        fi
+
+        python "${{ github.action_path }}/run_visual_tests.py" "${ARGS[@]}"
+
+    - name: Upload visual report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: visual-regression-report
+        path: visual-report.json
+        if-no-files-found: ignore
