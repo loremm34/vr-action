@@ -19,6 +19,14 @@ inputs:
     description: "Automatically detect and use Vercel preview URL for pull requests instead of site-url"
     required: false
     default: "true"
+  vercel-bypass-secret:
+    description: |
+      Vercel Protection Bypass secret for automation (optional).
+      Enable it in Vercel → Project → Settings → Deployment Protection → Protection Bypass for Automation.
+      Add the generated secret as a repo secret (e.g. VERCEL_BYPASS_SECRET) and pass it here.
+      When set, it is appended as ?x-vercel-protection-bypass=SECRET to the preview URL.
+    required: false
+    default: ""
   backend-url:
     description: "Visual regression backend URL"
     required: false
@@ -84,6 +92,11 @@ runs:
         " 2>/dev/null || true)
               if [ -n "$PREVIEW_URL" ]; then
                 echo "Found Vercel preview: $PREVIEW_URL"
+                # Append bypass secret if provided (bypasses Vercel authentication gate)
+                if [ -n "${{ inputs.vercel-bypass-secret }}" ]; then
+                  PREVIEW_URL="${PREVIEW_URL}?x-vercel-protection-bypass=${{ inputs.vercel-bypass-secret }}"
+                  echo "Protection bypass secret applied"
+                fi
                 SITE_URL="$PREVIEW_URL"
                 break
               fi
