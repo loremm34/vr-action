@@ -13,18 +13,36 @@ inputs:
     description: "VR project ID (UUID from the dashboard)"
     required: true
   site-url:
-    description: "Production URL of your site (e.g. https://my-app.vercel.app)"
+    description: "Production URL of your site (e.g. https://my-app.com)"
     required: true
-  vercel-preview:
-    description: "Automatically detect and use Vercel preview URL for pull requests instead of site-url"
+  preview-url:
+    description: |
+      Explicit preview URL to test against for pull requests.
+      Use this if your platform does not register GitHub Deployments automatically
+      (e.g. custom CI, AWS, self-hosted). When provided, auto-detect is skipped.
+    required: false
+    default: ""
+  auto-detect-preview:
+    description: |
+      Automatically find the PR preview URL via the GitHub Deployments API.
+      Works out of the box with Vercel, Netlify, Render — any platform that registers
+      deployments to GitHub. Set to "false" to always test against site-url.
     required: false
     default: "true"
-  vercel-bypass-secret:
+  preview-environment:
     description: |
-      Vercel Protection Bypass secret for automation (optional).
-      Enable it in Vercel → Project → Settings → Deployment Protection → Protection Bypass for Automation.
-      Add the generated secret as a repo secret (e.g. VERCEL_BYPASS_SECRET) and pass it here.
-      When set, it is appended as ?x-vercel-protection-bypass=SECRET to the preview URL.
+      GitHub Deployment environment name to look for when auto-detecting the preview URL.
+      Default "Preview" works for Vercel and Netlify. Change if your platform uses
+      a different name (e.g. "preview", "staging", "pr-preview").
+    required: false
+    default: "Preview"
+  preview-bypass-secret:
+    description: |
+      Secret token to bypass preview deployment authentication.
+      Vercel: enable "Protection Bypass for Automation" in Project → Settings → Deployment Protection,
+      copy the secret, add it as a repo secret, and pass it here. It will be appended as
+      ?x-vercel-protection-bypass=SECRET to the preview URL.
+      Other platforms: leave empty (most don't restrict preview access by default).
     required: false
     default: ""
   backend-url:
@@ -58,7 +76,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Resolve Vercel preview URL (PR only)
+    - name: Resolve preview URL (PR only)
       id: resolve-url
       shell: bash
       env:
@@ -66,46 +84,56 @@ runs:
       run: |
         SITE_URL="${{ inputs.site-url }}"
 
-        if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ inputs.vercel-preview }}" = "true" ]; then
-          SHA="${{ github.event.pull_request.head.sha }}"
-          echo "PR detected — looking for Vercel preview for SHA ${SHA:0:7}..."
-          PREVIEW_URL=""
-          for i in $(seq 1 30); do
-            DEPLOY_ID=$(curl -sf \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/${{ github.repository }}/deployments?sha=$SHA&environment=Preview" \
-              | python3 -c "
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+
+          # Priority 1: explicit preview-url provided by the client
+          if [ -n "${{ inputs.preview-url }}" ]; then
+            SITE_URL="${{ inputs.preview-url }}"
+            echo "Using explicit preview URL: $SITE_URL"
+
+          # Priority 2: auto-detect via GitHub Deployments API
+          elif [ "${{ inputs.auto-detect-preview }}" = "true" ]; then
+            SHA="${{ github.event.pull_request.head.sha }}"
+            ENV="${{ inputs.preview-environment }}"
+            echo "PR detected — looking for '$ENV' deployment for SHA ${SHA:0:7}..."
+            PREVIEW_URL=""
+            for i in $(seq 1 30); do
+              DEPLOY_ID=$(curl -sf \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/deployments?sha=$SHA&environment=$ENV" \
+                | python3 -c "
         import json,sys
         deps = json.load(sys.stdin)
         if deps: print(deps[0]['id'])
         " 2>/dev/null || true)
-            if [ -n "$DEPLOY_ID" ]; then
-              PREVIEW_URL=$(curl -sf \
-                -H "Authorization: Bearer $GH_TOKEN" \
-                "https://api.github.com/repos/${{ github.repository }}/deployments/$DEPLOY_ID/statuses" \
-                | python3 -c "
+              if [ -n "$DEPLOY_ID" ]; then
+                PREVIEW_URL=$(curl -sf \
+                  -H "Authorization: Bearer $GH_TOKEN" \
+                  "https://api.github.com/repos/${{ github.repository }}/deployments/$DEPLOY_ID/statuses" \
+                  | python3 -c "
         import json,sys
         statuses = json.load(sys.stdin)
         for s in statuses:
             if s.get('state') == 'success' and s.get('environment_url'):
                 print(s['environment_url']); break
         " 2>/dev/null || true)
-              if [ -n "$PREVIEW_URL" ]; then
-                echo "Found Vercel preview: $PREVIEW_URL"
-                # Append bypass secret if provided (bypasses Vercel authentication gate)
-                if [ -n "${{ inputs.vercel-bypass-secret }}" ]; then
-                  PREVIEW_URL="${PREVIEW_URL}?x-vercel-protection-bypass=${{ inputs.vercel-bypass-secret }}"
-                  echo "Protection bypass secret applied"
+                if [ -n "$PREVIEW_URL" ]; then
+                  echo "Found preview deployment: $PREVIEW_URL"
+                  # Append bypass secret if provided (e.g. Vercel protection bypass)
+                  if [ -n "${{ inputs.preview-bypass-secret }}" ]; then
+                    PREVIEW_URL="${PREVIEW_URL}?x-vercel-protection-bypass=${{ inputs.preview-bypass-secret }}"
+                    echo "Bypass secret applied"
+                  fi
+                  SITE_URL="$PREVIEW_URL"
+                  break
                 fi
-                SITE_URL="$PREVIEW_URL"
-                break
               fi
+              echo "Attempt $i/30: preview not ready, waiting 10s..."
+              sleep 10
+            done
+            if [ -z "$PREVIEW_URL" ]; then
+              echo "WARNING: No preview deployment found after 5 min, falling back to site-url"
             fi
-            echo "Attempt $i/30: preview not ready, waiting 10s..."
-            sleep 10
-          done
-          if [ -z "$PREVIEW_URL" ]; then
-            echo "WARNING: Vercel preview not found after 5 min, using production URL"
           fi
         fi
 
@@ -151,11 +179,4 @@ runs:
         name: visual-regression-report
         path: visual-report.json
         if-no-files-found: ignore
-
-    - name: Upload visual report
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: visual-regression-report
-        path: visual-report.json
         if-no-files-found: ignore
