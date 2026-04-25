@@ -179,4 +179,3 @@ runs:
         name: visual-regression-report
         path: visual-report.json
         if-no-files-found: ignore
-        if-no-files-found: ignore
