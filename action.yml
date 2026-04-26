@@ -89,6 +89,10 @@ runs:
           # Priority 1: explicit preview-url provided by the client
           if [ -n "${{ inputs.preview-url }}" ]; then
             SITE_URL="${{ inputs.preview-url }}"
+            if [ -n "${{ inputs.preview-bypass-secret }}" ]; then
+              SITE_URL="${SITE_URL}?x-vercel-protection-bypass=${{ inputs.preview-bypass-secret }}"
+              echo "Bypass secret applied to explicit preview URL"
+            fi
             echo "Using explicit preview URL: $SITE_URL"
 
           # Priority 2: auto-detect via GitHub Deployments API
