@@ -123,7 +123,7 @@ def run_tests(
 
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        f"{backend_url}/projects/{project_id}/runs",
+        f"{backend_url}/v1/projects/{project_id}/runs",
         data=data,
         headers={
             "Content-Type": "application/json",
@@ -146,7 +146,7 @@ def run_tests(
     # Poll until the run completes (async queue returns "pending")
     if report.get("status") == "pending":
         run_id = report["id"]
-        poll_url = f"{backend_url}/projects/{project_id}/runs/{run_id}"
+        poll_url = f"{backend_url}/v1/projects/{project_id}/runs/{run_id}"
         poll_headers = {"X-API-Key": api_key}
         max_attempts = 120  # 120 × 5s = 10 min max
         print(f"[*] Run queued (id={run_id}), waiting for completion...")
